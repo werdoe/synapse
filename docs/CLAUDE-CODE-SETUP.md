@@ -1,201 +1,148 @@
-# Synapse + Claude Code Setup Guide
+# Synapse + Claude Code Setup
 
-This guide walks you through integrating Synapse with Claude Code. Read the limitations section first — Synapse was designed for multi-agent fleets and some features require adaptation for single-agent use.
+Two ways to integrate Synapse with Claude Code:
 
----
+1. **Plugin (recommended)** — Claude Code lifecycle hooks, guidance auto-injected at session start
+2. **Wrapper** — shell script wrapper for environments without plugin support
 
-## What This Enables
-
-When you run Claude Code through the Synapse wrapper:
-1. **Reflection loop** — every session produces a structured reflection that feeds synthesis
-2. **mtime-based catch-up** — synthesis picks up late reflections on the next run
-3. **Guidance accumulation** — your reflections build a personal guidance file over time
-
-What it **can't** do without an orchestrator:
-- Automatic promotion of patterns to shared guidance
-- Cross-agent pattern detection
-- Contradiction management
+The plugin is the right way. The wrapper is for special cases.
 
 ---
 
-## Prerequisites
+## Option A: Claude Code Plugin (Recommended)
 
-- [x] Synapse installed (`git clone https://github.com/werdoe/synapse.git`)
-- [x] Claude Code installed and authenticated
-- [x] jq installed (`brew install jq`)
-- [x] bash 4+ (macOS default is fine)
+### How It Works
 
----
+Claude Code has lifecycle hooks (same system Claude-Mem uses). Synapse uses them:
 
-## Limitations You Should Know
+| Hook | What Happens |
+|------|--------------|
+| `SessionStart` | Guidance + past mistakes printed to stdout — Claude Code sees it |
+| `UserPromptSubmit` | Your prompts logged to session track |
+| `PostToolUse` | Tool results captured as tier-2 evidence |
+| `Stop` | Reflection written automatically |
+| `SessionEnd` | Synthesis pipeline triggered (throttled, every 4h+) |
 
-### 1. No Orchestrator (you are Kvothe)
+The key insight from Claude-Mem: **`SessionStart` hook output goes to Claude Code's stdout** — so the guidance actually reaches the agent, not just a log file.
 
-Synapse assumes a separate orchestrator agent reviews 4AM synthesis proposals, manages the contradiction log, and promotes patterns to shared guidance. With Claude Code alone, **you fill that role**.
+### Install
 
-**What you do:**
-- After synthesis runs, read `memory/synapse/proposals/YYYY-MM-DD.md`
-- Edit `memory/guidance/claude-code.md` to add/update your personal guidance
-- Edit `memory/guidance/shared.md` if you want fleet-level guidance (only makes sense if multiple agents contribute)
-
-**Practical mode:** Set `SYNAPSE_REVIEW_MODE=manual` in your config. Synthesis will write proposals but not attempt any automatic promotion. You review and apply.
-
-### 2. No Session Lifecycle Hooks
-
-Claude Code has no native "session ended" event. The wrapper runs the shutdown gate after every call, but this only works if every Claude Code invocation goes through the wrapper.
-
-**What you do:**
-- Use the alias (`cc`) for every Claude Code call — no direct `claude --print` calls
-- If you forget and run direct, the reflection won't be written (no recovery within the session)
-- Synthesis runs at 4AM picks up any reflections that exist by then
-
-**Better pattern:** Run synthesis manually after any significant session:
 ```bash
-./scripts/synthesis.sh --dry-run  # preview what it would do
-./scripts/synthesis.sh            # actually run
+# From the plugin marketplace
+/plugin marketplace add werdoe/synapse
+/plugin install synapse
+
+# Restart Claude Code
 ```
 
-### 3. No Multi-Agent Pattern Detection
-
-Synapse's power is cross-agent pattern matching — the same mistake caught independently by Kilvin, Stercus, and Bast surfaces as a shared candidate. With one agent (Claude Code), synthesis can only find patterns within your own reflection history.
-
-**What you get:** Personal growth loop — not fleet-wide intelligence.
-
-**What you can do:** Point multiple Claude Code sessions (different projects, different agent names) at the same shared memory path. Different `SYNAPSE_AGENT_NAME` values write to different reflection directories. Synthesis reads all of them and can detect cross-project patterns.
-
----
-
-## Setup
-
-### Step 1: Config file
-
-In your project root or home directory:
+Or install via npm:
 
 ```bash
-cat > .synapse-workspace << 'EOF'
+npx synapse install
+```
+
+### Configure
+
+Create `~/.claude-mem/settings.json` equivalent for Synapse — either environment variables or a `.synapse-workspace` file:
+
+```bash
+# Environment variables
+export SYNAPSE_ROOT="$HOME/synapse"
+export SYNAPSE_AGENT_NAME="claude-code"
+export SYNAPSE_MEM="$HOME/.synapse-memory"
+
+# Optional: show guidance at session start (default: true)
+export SYNAPSE_VERBOSE=true
+```
+
+Or create `.synapse-workspace` in your project:
+
+```bash
 SYNAPSE_ROOT="$HOME/synapse"
 SYNAPSE_AGENT_NAME="claude-code"
-SYNAPSE_MEM="$HOME/.synapse-memory"
-SYNAPSE_REVIEW_MODE="manual"
-EOF
+SYNAPSE_MEM="./.synapse-memory"
 ```
 
-### Step 2: Alias
+### What You See at Session Start
 
-```bash
-echo 'alias cc="$HOME/synapse/scripts/claude-code-wrapper.sh"' >> ~/.zshrc
-source ~/.zshrc
+```
+🧠 Synapse — your active guidance:
+
+## Your Synapse Personal Guidance
+- [P-claude-code-01] verify before building — check OpenClaw docs first
+- [P-claude-code-02] always run preflight before Kilvin spawn
+
+## Synapse Fleet Guidance (shared patterns)
+- [GS-01] verify before Kilvin spawn
+
+Past mistakes to avoid:
+  • gateway startup times out on MacBook
+  • token mismatch after restart
 ```
 
-### Step 3: Run via Synapse
+This appears every time Claude Code starts. Your patterns are in front of you before you begin work.
 
-```bash
-cc --print --permission-mode bypassPermissions
-cc --print --project /path/to/project --permission-mode bypassPermissions
+### Memory Structure Created
+
 ```
-
----
-
-## The Manual Orchestrator Workflow
-
-After each session (or batch of sessions), you review proposals:
-
-```bash
-# Run synthesis
-~/synapse/scripts/synthesis.sh
-
-# Read what it generated
-cat ~/.synapse-memory/synapse/proposals/$(date +%Y-%m-%d).md
-
-# Edit your personal guidance
-nano ~/.synapse-memory/guidance/claude-code.md
-
-# Or promote to shared if multiple agents use this memory
-nano ~/.synapse-memory/guidance/shared.md
-```
-
-**Proposal format:**
-```markdown
-## Candidate {N}
-- agent: claude-code
-- type: personal | shared-candidate
-- proposed_key: P-claude-code-01
-- proposed_rule: {one-line rule}
-- evidence_tier: 3
-- evidence: reflection YYYY-MM-DD HHMM (self-report)
-- confidence: 0.72
-- promotion_path: requires_personal_first: yes
-```
-
-To promote: copy `proposed_rule` into your guidance file with the `P-claude-code-{nn}` key.
-
----
-
-## Multiple Claude Code Agents (Better Pattern)
-
-If you work across multiple projects, use separate agent names:
-
-```bash
-# Project A
-SYNAPSE_AGENT_NAME="cc-project-a" SYNAPSE_MEM="/shared/synapse-memory" cc --print ...
-
-# Project B
-SYNAPSE_AGENT_NAME="cc-project-b" SYNAPSE_MEM="/shared/synapse-memory" cc --print ...
-```
-
-Synthesis reads all reflection directories and catches patterns across projects. This gets you closer to the actual Synapse value — cross-agent pattern detection with a single-user setup.
-
----
-
-## Reflection Format (Technical)
-
-The wrapper writes Technical format reflections:
-
-```markdown
-## Reflection — {HH:MM} — {N} — {task}
-
-### What did I do?
-### What broke or surprised me?
-### What would I do differently?
-### Does this challenge any of my personal guidance?
-### Flag for:
-```
-
-Prompts are inline after each session. Set env vars to skip prompts:
-```bash
-SYNAPSE_SUMMARY="built auth system" SYNAPSE_BROKE="token refresh edge case" cc --print
+~/.synapse-memory/
+├── guidance/
+│   ├── claude-code.md       ← auto-populated by synthesis
+│   └── shared.md            ← fleet guidance (multi-agent)
+├── reflections/
+│   └── claude-code/
+│       └── YYYY-MM-DD.md    ← one file per day, auto-written
+├── chronicles/
+│   └── YYYY-MM-DD.md
+└── synapse/
+    ├── proposals/            ← synthesis candidates
+    ├── observations/         ← tier-2 tool use evidence
+    ├── session-log.md
+    └── contradiction-log.md
 ```
 
 ---
 
-## Running Without Synapse
+## Option B: Wrapper Script (Fallback)
+
+For environments where the plugin isn't available. See `scripts/claude-code-wrapper.sh` in the Synapse repo.
+
+**Limitation:** The wrapper can't inject guidance into Claude Code's context — it only prints to terminal. Claude Code won't read it automatically. Use the plugin instead.
+
+---
+
+## Auto-Promotion
+
+High-confidence patterns auto-append to your guidance file:
+
+- **Tier 1/2 evidence** (chronicle events, verified task artifacts) → auto-promote
+- **Tier 3** (self-reports) → proposal only, manual review
+
+The synthesis pipeline runs every 4+ hours (throttled). Your guidance file grows automatically from session reflections.
+
+---
+
+## Limitations (Honest)
+
+| Feature | Plugin | Notes |
+|---------|--------|-------|
+| Guidance in context | ✅ Yes | Via SessionStart hook stdout |
+| Reflection auto-written | ✅ Yes | Via Stop hook |
+| Multi-agent patterns | ⚠️ Limited | Only works if multiple agents use the same SYNAPSE_MEM |
+| Orchestrator review | ❌ Manual | You review proposals (same as wrapper) |
+| Contradiction management | ⚠️ Logged | Notification fires but resolution is manual |
+
+The orchestrator layer (promotion review, contradiction resolution, shared guidance) is still manual — the plugin handles the reflection loop and synthesis, not the governance.
+
+---
+
+## Uninstall
 
 ```bash
-# Direct call (no wrapper)
-claude --print --permission-mode bypassPermissions
-
-# Or with wrapper disabled
-SYNAPSE_MEM="" ./synapse/scripts/claude-code-wrapper.sh --print
+/plugin uninstall synapse
+rm -rf ~/.synapse-memory  # optional — your reflections
 ```
 
 ---
 
-## Honest Assessment
-
-| Feature | Synapse on OpenClaw | Synapse on Claude Code |
-|---------|---------------------|------------------------|
-| Reflection loop | ✅ Native | ✅ Wrapper (manual hooks) |
-| 4AM synthesis | ✅ Native cron | ✅ System cron (same) |
-| Orchestrator review | ✅ Kvothe agent | ❌ You (manual) |
-| Cross-agent patterns | ✅ 11-agent fleet | ⚠️ Multiple CC sessions only |
-| Contradiction management | ✅ Auto | ❌ Manual |
-| Shared guidance | ✅ Auto-promotion | ⚠️ You edit files manually |
-| Session gates | ✅ Native | ⚠️ Shell wrapper |
-
-**The wrapper gives you the reflection loop and synthesis.** The orchestrator layer (promotion, contradiction handling, shared guidance) is manual with Claude Code. That's the honest tradeoff.
-
-For single-agent use, Synapse still helps — it just requires you to do the synthesis review work that Kvothe automates on OpenClaw.
-
----
-
-*See [SPEC.md](../SPEC.md) for the full system specification.*
+*For the full system spec, see [SPEC.md](../SPEC.md).*

@@ -1,0 +1,78 @@
+{
+  "description": "Synapse — Unified Growth System for AI Agent Fleets",
+  "version": "1.0",
+  "hooks": {
+    "Setup": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "export PATH=\"$($SHELL -lc 'echo $PATH' 2>/dev/null):$PATH\"; _R=\"${CLAUDE_PLUGIN_ROOT}\"; [ -z \"$_R\" ] && _R=\"$(ls -dt $HOME/.claude/plugins/cache/werdoe/synapse/[0-9]*/ 2>/dev/null | head -1)\"; _R=\"${_R%/}\"; [ -z \"$_R\" ] && _R=\"$HOME/.claude/plugins/marketplaces/werdoe/plugin\"; [ ! -d \"$_R\" ] && _R=\"$(dirname \"$(find ~/.claude/plugins -name 'synapse-hooks.js' -type f 2>/dev/null | head -1))\"/..; node \"$_R/scripts/init.js\" >> /tmp/synapse-plugin.log 2>&1 || true; echo '{\"continue\":true,\"suppressOutput\":true}'",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "export PATH=\"$($SHELL -lc 'echo $PATH' 2>/dev/null):$PATH\"; _R=\"${CLAUDE_PLUGIN_ROOT}\"; [ -z \"$_R\" ] && _R=\"$(ls -dt $HOME/.claude/plugins/cache/werdoe/synapse/[0-9]*/ 2>/dev/null | head -1)\"; _R=\"${_R%/}\"; [ -z \"$_R\" ] && _R=\"$HOME/.claude/plugins/marketplaces/werdoe/plugin\"; node \"$_R/scripts/inject-guidance.js\" 2>/dev/null | head -50; echo '{\"continue\":true}'",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "export PATH=\"$($SHELL -lc 'echo $PATH' 2>/dev/null):$PATH\"; _R=\"${CLAUDE_PLUGIN_ROOT}\"; [ -z \"$_R\" ] && _R=\"$(ls -dt $HOME/.claude/plugins/cache/werdoe/synapse/[0-9]*/ 2>/dev/null | head -1)\"; _R=\"${_R%/}\"; [ -z \"$_R\" ] && _R=\"$HOME/.claude/plugins/marketplaces/werdoe/plugin\"; node \"$_R/scripts/session-track.js\" user-prompt 2>/dev/null || true; echo '{\"continue\":true,\"suppressOutput\":true}'",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "export PATH=\"$($SHELL -lc 'echo $PATH' 2>/dev/null):$PATH\"; _R=\"${CLAUDE_PLUGIN_ROOT}\"; [ -z \"$_R\" ] && _R=\"$(ls -dt $HOME/.claude/plugins/cache/werdoe/synapse/[0-9]*/ 2>/dev/null | head -1)\"; _R=\"${_R%/}\"; [ -z \"$_R\" ] && _R=\"$HOME/.claude/plugins/marketplaces/werdoe/plugin\"; node \"$_R/scripts/observe.js\" 2>/dev/null || true; echo '{\"continue\":true,\"suppressOutput\":true}'",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "export PATH=\"$($SHELL -lc 'echo $PATH' 2>/dev/null):$PATH\"; _R=\"${CLAUDE_PLUGIN_ROOT}\"; [ -z \"$_R\" ] && _R=\"$(ls -dt $HOME/.claude/plugins/cache/werdoe/synapse/[0-9]*/ 2>/dev/null | head -1)\"; _R=\"${_R%/}\"; [ -z \"$_R\" ] && _R=\"$HOME/.claude/plugins/marketplaces/werdoe/plugin\"; node \"$_R/scripts/write-reflection.js\" 2>/dev/null || true; echo '{\"continue\":true,\"suppressOutput\":true}'",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "export PATH=\"$($SHELL -lc 'echo $PATH' 2>/dev/null):$PATH\"; _R=\"${CLAUDE_PLUGIN_ROOT}\"; [ -z \"$_R\" ] && _R=\"$(ls -dt $HOME/.claude/plugins/cache/werdoe/synapse/[0-9]*/ 2>/dev/null | head -1)\"; _R=\"${_R%/}\"; [ -z \"$_R\" ] && _R=\"$HOME/.claude/plugins/marketplaces/werdoe/plugin\"; node \"$_R/scripts/synthesis-trigger.js\" 2>/dev/null || true; echo '{\"continue\":true,\"suppressOutput\":true}'",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

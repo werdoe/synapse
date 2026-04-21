@@ -27,7 +27,11 @@ The result: mistakes stop repeating. Insights compound. Every agent gets smarter
 
 Synapse is **production-ready** and actively running on the [Chandrian fleet](https://github.com/werdoe/neemclaw-reloaded) (11 agents, OpenClaw).
 
-The core system is framework-agnostic. See [Adapting for Hermes / Claude Code](#adapting-for-hermes-claude-code) below.
+Two integration paths:
+- **OpenClaw** — native skill integration (full support)
+- **Claude Code** — plugin with lifecycle hooks (full support via Claude Code plugin hooks system)
+
+The plugin system uses Claude Code's built-in lifecycle hooks (SessionStart, PostToolUse, Stop, SessionEnd) to inject guidance, capture observations, and write reflections automatically — no wrapper script needed.
 
 ---
 
