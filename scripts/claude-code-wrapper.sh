@@ -3,16 +3,22 @@
 # Synapse Wrapper for Claude Code
 # Run this instead of `claude --print` to add Synapse lifecycle.
 #
+# Features:
+# - Guidance digest at session start (your latest patterns)
+# - Session lifecycle tracking (open-date, session ID)
+# - Reflection written after every session (interactive or env-var)
+# - Shutdown gate on exit
+#
 # Usage:
-#   ./claude-code-wrapper.sh --print --permission-mode bypassPermissions
-#   ./claude-code-wrapper.sh --print --project /path/to/project
-#   ./claude-code-wrapper.sh --resume session-id
+#   cc --print --permission-mode bypassPermissions
+#   cc --print --project /path/to/project
+#   cc --resume session-id
 #
 # Non-interactive (env vars):
-#   SYNAPS E_SUMMARY="what I built" SYNAPSE_BROKE="edge case" ./claude-code-wrapper.sh ...
+#   SYNAPS E_SUMMARY="..." SYNAPSE_BROKE="..." SYNAPSE_DIFFERENT="..." cc ...
 #
 # Interactive (prompts after session):
-#   SYNAPSE_INTERACTIVE=1 ./claude-code-wrapper.sh ...
+#   SYNAPSE_INTERACTIVE=1 cc ...
 # ============================================================
 
 set -euo pipefail
@@ -26,37 +32,27 @@ SYNAPSE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 find_synapse_config() {
   local dir="$PWD"
   for i in {1..5}; do
-    if [[ -f "$dir/.synapse-workspace" ]]; then
-      echo "$dir/.synapse-workspace"
-      return 0
-    fi
+    [[ -f "$dir/.synapse-workspace" ]] && echo "$dir/.synapse-workspace" && return 0
     dir="$(dirname "$dir")"
   done
-  if [[ -f "${HOME}/.synapse-workspace" ]]; then
-    echo "${HOME}/.synapse-workspace"
-    return 0
-  fi
+  [[ -f "${HOME}/.synapse-workspace" ]] && echo "${HOME}/.synapse-workspace" && return 0
   return 1
 }
 
-# Load config if present
 SYNAPSE_CONFIG="${SYNAPSE_WORKSPACE:-$(find_synapse_config 2>/dev/null || echo "")}"
-
 SYNAPSE_MEM="${SYNAPSE_MEM:-${SYNAPSE_ROOT}/memory}"
 SYNAPSE_AGENT_NAME="${SYNAPSE_AGENT_NAME:-claude-code}"
 SYNAPSE_INTERACTIVE="${SYNAPSE_INTERACTIVE:-0}"
 
 if [[ ! -f "$SYNAPSE_CONFIG" && -z "${SYNAPSE_WORKSPACE:-}" ]]; then
   echo "[SYNAPSE] No .synapse-workspace found. Running without Synapse."
-  echo "[SYNAPSE] Create .synapse-workspace in your project to enable. See docs/CLAUDE-CODE-SETUP.md"
+  echo "[SYNAPSE] Create .synapse-workspace in your project. See docs/CLAUDE-CODE-SETUP.md"
   echo ""
   claude "$@"
   exit $?
 fi
 
-if [[ -f "$SYNAPSE_CONFIG" ]]; then
-  source "$SYNAPSE_CONFIG"
-fi
+[[ -f "$SYNAPSE_CONFIG" ]] && source "$SYNAPSE_CONFIG"
 
 export SYNAPSE_WORKSPACE="${SYNAPSE_CONFIG}"
 export SYNAPSE_ROOT
@@ -69,15 +65,8 @@ init_synapse() {
   mkdir -p "$mem/guidance" "$mem/reflections/${SYNAPSE_AGENT_NAME}"
   mkdir -p "$mem/chronicles" "$mem/synapse/proposals" "$mem/synapse/chronicle-reflections"
   touch "$mem/synapse/session-log.md" "$mem/synapse/processed-registry.jsonl" 2>/dev/null || true
-  
-  if [[ ! -f "$mem/synapse/file-mtimes.json" ]]; then
-    echo '{}' > "$mem/synapse/file-mtimes.json"
-  fi
-  
-  if ! grep -q "^# Synapse Session Log" "$mem/synapse/session-log.md" 2>/dev/null; then
-    echo "# Synapse Session Log" > "$mem/synapse/session-log.md"
-    echo "" >> "$mem/synapse/session-log.md"
-  fi
+  [[ ! -f "$mem/synapse/file-mtimes.json" ]] && echo '{}' > "$mem/synapse/file-mtimes.json"
+  grep -q "^# Synapse Session Log" "$mem/synapse/session-log.md" 2>/dev/null || { echo "# Synapse Session Log" > "$mem/synapse/session-log.md"; echo "" >> "$mem/synapse/session-log.md"; }
 }
 
 init_synapse
@@ -91,10 +80,9 @@ HHMM=$(date +%H%M)
 SESSION_CANDIDATE="${OPEN_DATE}-${HHMM}"
 TIMESTAMP=$(date +%Y-%m-%d\ %H:%M)
 
-# Write preflight-date
-PREFLIGHT_DATE="${SYNAPSE_MEM}/synapse/.preflight-date"
-echo "{\"open_date\": \"$OPEN_DATE\", \"open_date_yesterday\": \"$OPEN_DATE_YESTERDAY\", \"session_candidate\": \"$SESSION_CANDIDATE\"}" > "$PREFLIGHT_DATE"
-
+# ============================================================
+# Header
+# ============================================================
 echo ""
 echo "═══════════════════════════════════════════"
 echo "SYNAPSE — Claude Code Session"
@@ -105,17 +93,54 @@ echo "  Agent:      $SYNAPSE_AGENT_NAME"
 echo ""
 
 # ============================================================
+# GUIDANCE DIGEST — show before each session
+# ============================================================
+echo "── Synapse Guidance (latest patterns) ──"
+
+guidance_file="${SYNAPSE_MEM}/guidance/${SYNAPSE_AGENT_NAME}.md"
+shared_guidance="${SYNAPSE_MEM}/guidance/shared.md"
+
+print_guidance() {
+  local file="$1"
+  local label="$2"
+  if [[ -f "$file" ]]; then
+    local count
+    count=$(grep -c "^| P-" "$file" 2>/dev/null || echo "0")
+    if [[ "$count" -gt 0 ]]; then
+      echo "  ${label} (last ${count} entries):"
+      grep "^| P-" "$file" 2>/dev/null | tail -5 | while IFS='|' read -r _ key rule _; do
+        key=$(echo "$key" | tr -d ' ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        rule=$(echo "$rule" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        [[ -n "$key" && -n "$rule" && "$key" != "Key" ]] && echo "    · $key — $rule"
+      done
+    else
+      echo "  ${label}: (no entries yet)"
+    fi
+  else
+    echo "  ${label}: (file not found)"
+  fi
+}
+
+print_guidance "$guidance_file" "Personal"
+print_guidance "$shared_guidance" "Shared"
+
+echo ""
+
+# ============================================================
+# Write preflight-date
+# ============================================================
+PREFLIGHT_DATE="${SYNAPSE_MEM}/synapse/.preflight-date"
+echo "{\"open_date\": \"$OPEN_DATE\", \"open_date_yesterday\": \"$OPEN_DATE_YESTERDAY\", \"session_candidate\": \"$SESSION_CANDIDATE\"}" > "$PREFLIGHT_DATE"
+
+# ============================================================
 # Chronicle
 # ============================================================
 CHRONICLE="${SYNAPSE_MEM}/chronicles/${OPEN_DATE}.md"
-if [[ ! -f "$CHRONICLE" ]]; then
-  echo "# Chronicle — ${OPEN_DATE}" > "$CHRONICLE"
-  echo "" >> "$CHRONICLE"
-fi
+[[ ! -f "$CHRONICLE" ]] && echo "# Chronicle — ${OPEN_DATE}" > "$CHRONICLE" && echo "" >> "$CHRONICLE"
 echo "[${TIMESTAMP}] Claude Code session opened (agent: $SYNAPSE_AGENT_NAME)" >> "$CHRONICLE"
 
 # ============================================================
-# Startup gate
+# Session markers
 # ============================================================
 SESSION_OPEN_MARKER="${SYNAPSE_MEM}/synapse/.session-open-${SESSION_CANDIDATE}"
 SESSION_TYPE_MARKER="${SYNAPSE_MEM}/synapse/.session-type-${SESSION_CANDIDATE}"
@@ -123,36 +148,8 @@ SESSION_TYPE_MARKER="${SYNAPSE_MEM}/synapse/.session-type-${SESSION_CANDIDATE}"
 echo "{\"opened_at\": \"$TIMESTAMP\", \"gate_version\": \"2.0\", \"agent\": \"$SYNAPSE_AGENT_NAME\"}" > "$SESSION_OPEN_MARKER"
 echo "active" > "$SESSION_TYPE_MARKER"
 
-# Run startup gate (best-effort — warn but don't block on first run)
-"$SYNAPSE_ROOT/scripts/startup-gate.sh" >> "/tmp/synapse-session-${SESSION_CANDIDATE}.log" 2>&1 || {
-  echo "  ⚠️  Startup gate had warnings (first run? resolving...)"
-}
-
-echo "  ✅ Synapse session open"
+echo "  ✓ Synapse session open"
 echo ""
-
-# ============================================================
-# Detect task from args
-# ============================================================
-TASK_LABEL="claude-code session"
-for arg in "$@"; do
-  if [[ "$arg" == --project && -d "${*:$((i+1)):1}" ]]; then
-    TASK_LABEL="$(basename "$arg") — claude-code session"
-  fi
-  ((i++)) 2>/dev/null || true
-done
-
-i=0
-for arg in "$@"; do
-  if [[ "$arg" == "--project" ]]; then
-    next_idx=$((i + 1))
-    next_arg="${@:$next_idx:1}"
-    if [[ -n "$next_arg" && "$next_arg" != --* ]]; then
-      TASK_LABEL="$(basename "$next_arg")/$(echo "$next_arg" | xargs dirname | xargs basename)/claude-code"
-    fi
-  fi
-  i=$((i + 1))
-done
 
 # ============================================================
 # Spawn Claude Code
@@ -165,6 +162,22 @@ CLAUDE_EXIT=${PIPESTATUS[0]}
 
 echo ""
 echo "── Claude Code exited (code: $CLAUDE_EXIT) ──"
+
+# ============================================================
+# Detect task from args
+# ============================================================
+TASK_LABEL="claude-code session"
+i=0
+for arg in "$@"; do
+  if [[ "$arg" == "--project" ]]; then
+    next_idx=$((i + 1))
+    next_arg="${@:$next_idx:1}"
+    if [[ -n "$next_arg" && "$next_arg" != --* ]]; then
+      TASK_LABEL="$(basename "$next_arg")/claude-code"
+    fi
+  fi
+  i=$((i + 1))
+done
 
 # ============================================================
 # Write Reflection
@@ -187,27 +200,22 @@ WHAT_BROKE="${SYNAPSE_BROKE:-}"
 WHAT_DIFFERENT="${SYNAPSE_DIFFERENT:-}"
 FLAG_FOR="${SYNAPSE_FLAG_FOR:-}"
 
-# Interactive prompt if requested and env vars not set
 if [[ "$SYNAPSE_INTERACTIVE" == "1" && -z "$SYNAPSE_SUMMARY" ]]; then
   echo ""
   echo "── Synapse Reflection ──"
   echo "(press Enter to accept default)"
   echo ""
   
-  echo -n "What did you work on? [$TASK_LABEL] "
-  read -r input
+  read -p "What did you work on? [$TASK_LABEL] " input
   WORK_SUMMARY="${input:-$TASK_LABEL}"
   
-  echo -n "What broke or surprised you? [Nothing unexpected] "
-  read -r input
+  read -p "What broke or surprised you? [Nothing unexpected] " input
   WHAT_BROKE="${input:-Nothing unexpected}"
   
-  echo -n "What would you do differently? [No changes] "
-  read -r input
+  read -p "What would you do differently? [No changes] " input
   WHAT_DIFFERENT="${input:-No changes}"
   
-  echo -n "Pattern worth surfacing? [None] "
-  read -r input
+  read -p "Pattern worth surfacing? [None] " input
   FLAG_FOR="${input:-None}"
 fi
 
@@ -241,14 +249,14 @@ echo "  ✓ Reflection written (#${N})"
 # ============================================================
 # Update chronicle
 # ============================================================
-echo "[${TIMESTAMP}] Claude Code session closed (exit: $CLAUDE_EXIT)" >> "$CHRONICLE"
+echo "[${TIMESTAMP}] Claude Code session closed (exit: $CLAUDE_EXIT, reflection: #${N})" >> "$CHRONICLE"
 
 # ============================================================
 # Shutdown gate
 # ============================================================
 echo ""
 echo "── Shutdown gate ──"
-"$SYNAPSE_ROOT/scripts/shutdown-gate.sh" >> "/tmp/synapse-session-${SESSION_CANDIDATE}.log" 2>&1 || {
+"$SYNAPSE_ROOT/scripts/shutdown-gate.sh" >> "$LOGFILE" 2>&1 || {
   echo "  ⚠️  Shutdown gate had warnings"
 }
 
